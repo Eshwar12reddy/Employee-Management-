@@ -20,7 +20,7 @@ export class AuthService {
     if (!email || !email.includes('@')) throw new AuthError('A valid email is required')
     if (!name) throw new AuthError('A name is required')
     if (input.password.length < 12) throw new AuthError('Password must be at least 12 characters')
-    if (input.role === 'CEO' && (!input.allowCeoBootstrap || await this.repository.countUsersByRole('CEO') > 0)) throw new AuthError('CEO accounts can only be created by the secure first-account provisioning flow')
+    if (input.role === 'CEO' && (!input.allowCeoBootstrap || await this.repository.countUsers() > 0)) throw new AuthError('CEO accounts can only be created by the secure first-account provisioning flow')
     try {
       return await this.repository.createUser({ id: randomUUID(), email, name, role: input.role, passwordHash: await bcrypt.hash(input.password, 12), disabled: false })
     } catch {
@@ -36,6 +36,13 @@ export class AuthService {
     const expiresAt = new Date(Date.now() + this.config.sessionTtlHours * 60 * 60 * 1000).toISOString()
     await this.repository.createSession({ tokenHash: hashToken(sessionToken), csrfTokenHash: hashToken(csrfToken), userId: user.id, expiresAt })
     return { user: { id: user.id, email: user.email, name: user.name, role: user.role }, sessionToken, csrfToken, expiresAt }
+  }
+
+  async needsCeoBootstrap(): Promise<boolean> { return (await this.repository.countUsers()) === 0 }
+
+  async bootstrapCeo(email: string, name: string, password: string) {
+    await this.createUser({ email, name, password, role: 'CEO', allowCeoBootstrap: true })
+    return this.login(email, password)
   }
 
   async authenticate(sessionToken: string | undefined): Promise<AuthContext | null> {

@@ -45,6 +45,7 @@ export class PostgresAuthRepository implements AuthRepository {
   async touchSession(tokenHash: string): Promise<void> { await this.pool.query('UPDATE sessions SET last_seen_at = NOW() WHERE token_hash = $1', [tokenHash]) }
   async deleteSession(tokenHash: string): Promise<void> { await this.pool.query('DELETE FROM sessions WHERE token_hash = $1', [tokenHash]) }
   async countUsersByRole(role: UserRole): Promise<number> { const result = await this.pool.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM users WHERE role = $1', [role]); return Number(result.rows[0]?.count || 0) }
+  async countUsers(): Promise<number> { const result = await this.pool.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM users'); return Number(result.rows[0]?.count || 0) }
   async checkHealth(): Promise<void> { await this.pool.query('SELECT 1') }
   async close(): Promise<void> { /* shared pool is closed by the candidate repository */ }
 }

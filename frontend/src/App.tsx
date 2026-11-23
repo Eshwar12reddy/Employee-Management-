@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx'
 import { CalendarDays, Check, CirclePlus, FileDown, Flag, FolderKanban, Pencil, Printer, Save, Search, Settings2, ShieldCheck, Star, Target, Trash2, Upload, UserRound, BriefcaseBusiness, ArrowLeft, Eye, UserPlus, X, ArrowUpDown, LogOut } from 'lucide-react'
 import './styles.css'
 import type { Candidate, Project, Report, View } from './features/candidates/candidate-types'
-import { api, ApiError, AppUser, cacheCandidateList, getCurrentUser, hasMigratedLocalCandidates, loginUser, logoutUser, markLocalCandidatesMigrated, readCandidateCache, UnauthorizedError, upsertInBatches } from './features/candidates/candidate-api'
+import { api, ApiError, AppUser, cacheCandidateList, createFirstCeo, createTeamLead, getCurrentUser, getSetupStatus, hasMigratedLocalCandidates, loginUser, logoutUser, markLocalCandidatesMigrated, readCandidateCache, UnauthorizedError, upsertInBatches } from './features/candidates/candidate-api'
 import { exportCandidatesToExcel } from './features/candidates/candidate-export'
 import { blankReport, dateInputValue, formatDate, photoLink, shrinkPhoto, skillLibrary, uid, workingDays } from './features/candidates/candidate-utils'
 import { announceCandidatesChanged, subscribeToCandidateChanges } from './features/candidates/candidate-sync'
@@ -23,6 +23,8 @@ function App() {
   const [user, setUser] = useState<AppUser | null>(null)
   const [authChecking, setAuthChecking] = useState(true)
   const [authError, setAuthError] = useState('')
+  const [needsCeoSetup, setNeedsCeoSetup] = useState(false)
+  const [showAccountPanel, setShowAccountPanel] = useState(false)
   const flash = (message: string, ms = 2600) => { setNotice(message); setTimeout(() => setNotice(''), ms) }
   const markFailure = (_error: unknown) => setDbStatus('offline')
   const load = async (localItems: Candidate[] = [], allowLocalMigration = false) => {
@@ -48,8 +50,9 @@ function App() {
   }
   useEffect(() => {
     let active = true
-    void getCurrentUser().then(async current => {
+    void Promise.all([getCurrentUser(), getSetupStatus()]).then(async ([current, setup]) => {
       if (!active) return
+      setNeedsCeoSetup(setup.needsCeoSetup)
       setUser(current); setAuthChecking(false)
       if (current) await load(readCandidateCache(), current.role === 'TEAM_LEAD')
     }).catch(error => { if (!active) return; setAuthError(error instanceof ApiError ? error.message : 'Unable to contact the authentication service.'); setAuthChecking(false) })
@@ -69,6 +72,16 @@ function App() {
       await load(readCandidateCache(), nextUser.role === 'TEAM_LEAD')
     } catch (error) {
       setAuthError(error instanceof ApiError ? error.message : 'Email or password is incorrect')
+      throw error
+    }
+  }
+  const handleBootstrap = async (name: string, email: string, password: string) => {
+    try {
+      const nextUser = await createFirstCeo(name, email, password)
+      setNeedsCeoSetup(false); setAuthError(''); setUser(nextUser); setDbStatus('checking')
+      await load([], false)
+    } catch (error) {
+      setAuthError(error instanceof ApiError ? error.message : 'Unable to create the first CEO account')
       throw error
     }
   }
@@ -128,14 +141,15 @@ function App() {
     } catch { setNotice('Could not read this workbook. Please choose a valid .xlsx file.'); setTimeout(() => setNotice(''), 3000) }
   }
   if (authChecking) return <div className="access-gate"><div className="access-card"><ShieldCheck size={30}/><h2>Checking your session</h2><p>Connecting securely to the Employee Management workspace…</p></div></div>
-  if (!user) return <LoginScreen error={authError} onLogin={handleLogin}/>
+  if (!user) return <LoginScreen error={authError} needsCeoSetup={needsCeoSetup} onLogin={handleLogin} onCreateCeo={handleBootstrap}/>
   const canManage = user.role === 'TEAM_LEAD'
   return <div className="app-shell">
-    <header className="topbar"><div className="brand"><span className="brand-mark">C</span><span>Clyptus<span className="brand-dot">.ai</span></span></div><div className="workspace-name">{user.name} · {user.role === 'CEO' ? 'CEO' : 'Team Lead'} <span className={`workspace-pill ${dbStatus}`}>{dbStatus === 'connected' ? 'Database connected' : dbStatus === 'offline' ? 'Offline cache' : 'Connecting…'}</span></div><div className="toolbar">{view !== 'list' && <button className="button ghost" onClick={() => setView('list')}><ArrowLeft size={16}/> Candidate list</button>}{view === 'dashboard' && selected && canManage && <button className="button secondary" onClick={() => openEdit(selected)}><Pencil size={16}/> Edit candidate</button>}{view === 'dashboard' && selected && <button className="button primary" onClick={() => window.print()}><FileDown size={16}/> Download PDF</button>}<button className="button ghost" onClick={handleLogout}><LogOut size={16}/> Sign out</button></div></header>
+    <header className="topbar"><div className="brand"><span className="brand-mark">C</span><span>Clyptus<span className="brand-dot">.ai</span></span></div><div className="workspace-name">{user.name} · {user.role === 'CEO' ? 'CEO' : 'Team Lead'} <span className={`workspace-pill ${dbStatus}`}>{dbStatus === 'connected' ? 'Database connected' : dbStatus === 'offline' ? 'Offline cache' : 'Connecting…'}</span></div><div className="toolbar">{user.role === 'CEO' && <button className="button secondary" onClick={() => setShowAccountPanel(true)}><UserPlus size={16}/> Create Team Lead</button>}{view !== 'list' && <button className="button ghost" onClick={() => setView('list')}><ArrowLeft size={16}/> Candidate list</button>}{view === 'dashboard' && selected && canManage && <button className="button secondary" onClick={() => openEdit(selected)}><Pencil size={16}/> Edit candidate</button>}{view === 'dashboard' && selected && <button className="button primary" onClick={() => window.print()}><FileDown size={16}/> Download PDF</button>}<button className="button ghost" onClick={handleLogout}><LogOut size={16}/> Sign out</button></div></header>
     {view === 'list' && <CandidateList candidates={candidates} query={query} setQuery={setQuery} sort={sort} setSort={setSort} canManage={canManage} onAdd={openNew} onImport={importCandidates} onExport={() => { if (!candidates.length) { flash('There are no candidates to export.', 2600); return }; exportCandidatesToExcel(candidates); flash('Candidates exported to Excel', 2600) }} onOpen={openDashboard} onEdit={openEdit} onDelete={removeCandidate}/>}
     {view === 'form' && <CandidateForm report={draft} update={update} editing={!!editingId} onSave={() => saveCandidate(false)} onDraft={() => saveCandidate(true)} onCancel={() => setView('list')} onError={message => flash(message, 3000)}/>}
     {view === 'dashboard' && selected && <Dashboard report={selected} onBack={() => setView('list')} onEdit={() => openEdit(selected)} canEdit={canManage}/>}
     {notice && <div className="toast"><Check size={16}/> {notice}</div>}
+    {showAccountPanel && <TeamLeadAccountPanel onClose={() => setShowAccountPanel(false)} onCreated={message => { setShowAccountPanel(false); flash(message) }}/>}
   </div>
 }
 
@@ -160,13 +174,34 @@ function CandidateForm({ report, update, editing, onSave, onDraft, onCancel, onE
   </div><div className="form-actions"><button className="button ghost light-ghost" onClick={onCancel}>Cancel</button><button className="button secondary" onClick={onDraft}><Save size={16}/> Save draft</button><button className="button primary" onClick={onSave}><Check size={16}/> {editing ? 'Save changes' : 'Save candidate'}</button></div></main>
 }
 
-function LoginScreen({ error, onLogin }: { error: string; onLogin: (email: string, password: string) => Promise<void> }) {
+function LegacyLoginScreen({ error, onLogin }: { error: string; onLogin: (email: string, password: string) => Promise<void> }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const submit = async (e: React.FormEvent) => { e.preventDefault(); if (!email.trim() || !password) return; setBusy(true); try { await onLogin(email, password) } catch { /* parent displays the safe error */ } finally { setBusy(false) } }
   return <div className="access-gate" role="dialog" aria-modal="true" aria-labelledby="login-title"><form className="access-card" onSubmit={submit}><ShieldCheck size={30}/><h2 id="login-title">Sign in to Employee Management</h2><p>Use your individual account. Your role controls which records and actions are available.</p><input type="email" autoFocus autoComplete="username" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email address"/><input type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" aria-invalid={!!error}/>{error && <span className="access-error">{error}</span>}<button className="button primary" disabled={busy || !email.trim() || !password}>{busy ? 'Signing in…' : 'Sign in'}</button></form></div>
 }
+function LoginScreen({ error, needsCeoSetup, onLogin, onCreateCeo }: { error: string; needsCeoSetup: boolean; onLogin: (email: string, password: string) => Promise<void>; onCreateCeo: (name: string, email: string, password: string) => Promise<void> }) {
+  const [mode, setMode] = useState<'login' | 'bootstrap'>(needsCeoSetup ? 'bootstrap' : 'login')
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [busy, setBusy] = useState(false)
+  const submit = async (e: React.FormEvent) => { e.preventDefault(); if (!email.trim() || !password || (mode === 'bootstrap' && !name.trim())) return; setBusy(true); try { if (mode === 'bootstrap') await onCreateCeo(name, email, password); else await onLogin(email, password) } catch { /* parent displays the safe error */ } finally { setBusy(false) } }
+  return <div className="access-gate" role="dialog" aria-modal="true" aria-labelledby="login-title"><form className="access-card" onSubmit={submit}><ShieldCheck size={30}/><h2 id="login-title">{mode === 'bootstrap' ? 'Create the first CEO account' : 'Sign in to Employee Management'}</h2><p>{mode === 'bootstrap' ? 'This one-time setup creates the first CEO account. The role is fixed by the secure setup flow.' : 'Use your individual account. Your role controls which records and actions are available.'}</p>{mode === 'bootstrap' && <input type="text" autoComplete="name" value={name} onChange={e => setName(e.target.value)} placeholder="Full name"/>}<input type="email" autoFocus={mode === 'login'} autoComplete="username" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email address"/><input type="password" autoComplete={mode === 'bootstrap' ? 'new-password' : 'current-password'} value={password} onChange={e => setPassword(e.target.value)} placeholder={mode === 'bootstrap' ? 'Password (12+ characters)' : 'Password'} aria-invalid={!!error}/>{error && <span className="access-error">{error}</span>}<button className="button primary" disabled={busy || !email.trim() || !password || (mode === 'bootstrap' && !name.trim())}>{busy ? 'Working…' : mode === 'bootstrap' ? 'Create CEO account' : 'Sign in'}</button>{needsCeoSetup && mode === 'login' && <button type="button" className="button ghost light-ghost" onClick={() => setMode('bootstrap')}>Create the first CEO account</button>}{!needsCeoSetup && <small className="account-help">Need access? Ask the CEO to create your Team Lead account.</small>}{needsCeoSetup && mode === 'bootstrap' && <button type="button" className="button ghost light-ghost" onClick={() => setMode('login')}>Already have an account? Sign in</button>}</form></div>
+}
+
+function TeamLeadAccountPanel({ onClose, onCreated }: { onClose: () => void; onCreated: (message: string) => void }) {
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const submit = async (e: React.FormEvent) => { e.preventDefault(); if (password.length < 12) { setError('Password must be at least 12 characters'); return }; if (password !== confirm) { setError('Passwords do not match'); return }; setBusy(true); setError(''); try { const account = await createTeamLead(name, email, password); onCreated(`Team Lead account created for ${account.email}`) } catch (failure) { setError(failure instanceof ApiError ? failure.message : 'Unable to create the Team Lead account') } finally { setBusy(false) } }
+  return <div className="access-gate" role="dialog" aria-modal="true" aria-labelledby="team-lead-title"><form className="access-card" onSubmit={submit}><button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={16}/></button><ShieldCheck size={30}/><h2 id="team-lead-title">Create Team Lead account</h2><p>This account is created in PostgreSQL and can sign in from another browser or device. The role is fixed to Team Lead.</p><input type="text" autoFocus autoComplete="name" value={name} onChange={e => setName(e.target.value)} placeholder="Full name" required/><input type="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email address" required/><input type="password" autoComplete="new-password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Password (12+ characters)" required/><input type="password" autoComplete="new-password" value={confirm} onChange={e => setConfirm(e.target.value)} placeholder="Confirm password" required/>{error && <span className="access-error">{error}</span>}<button className="button primary" disabled={busy || !name.trim() || !email.trim() || !password || !confirm}>{busy ? 'Creating…' : 'Create Team Lead account'}</button><button type="button" className="button ghost light-ghost" onClick={onClose}>Cancel</button></form></div>
+}
+
 function FormSection({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) { return <section className="form-section"><div className="form-section-title"><span>{icon}</span><h2>{title}</h2></div>{children}</section> }
 function Field({ label, value, onChange, required, type = 'text', suffix, placeholder, readOnly }: { label: string; value: string; onChange: (v: string) => void; required?: boolean; type?: string; suffix?: string; placeholder?: string; readOnly?: boolean }) { return <label className="field"><span>{label}{required && <em>*</em>}</span><div className="input-suffix"><input type={type} value={value} placeholder={placeholder} readOnly={readOnly} onChange={e => onChange(e.target.value)} />{suffix && <b>{suffix}</b>}</div></label> }
 function AddButton({ onClick, children }: { onClick: () => void; children: React.ReactNode }) { return <button className="add-form-line" onClick={onClick}><CirclePlus size={15}/> {children}</button> }

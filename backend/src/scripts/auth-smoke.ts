@@ -66,9 +66,20 @@ try {
   const baseUrl = `http://127.0.0.1:${address.port}`
   assert.equal((await request(baseUrl, '/api/health', new Map())).response.status, 200)
 
-  await auth.createUser({ email: 'ceo@example.test', name: 'CEO', password: 'Correct-Horse-Battery-CEO', role: 'CEO', allowCeoBootstrap: true })
-  await auth.createUser({ email: 'lead@example.test', name: 'Team Lead', password: 'Correct-Horse-Battery-Lead', role: 'TEAM_LEAD' })
-  await assert.rejects(() => auth.createUser({ email: 'second-ceo@example.test', name: 'Second CEO', password: 'Correct-Horse-Battery-CEO', role: 'CEO', allowCeoBootstrap: true }))
+  const setupBefore = await request(baseUrl, '/api/auth/setup-status', new Map())
+  assert.equal(setupBefore.response.status, 200)
+  assert.deepEqual(setupBefore.body, { needsCeoSetup: true })
+  const ceoJar = new Map<string, string>()
+  await request(baseUrl, '/api/auth/csrf', ceoJar)
+  const bootstrap = await request(baseUrl, '/api/auth/bootstrap-ceo', ceoJar, { method: 'POST', headers: { 'x-csrf-token': ceoJar.get('ems_csrf') || '' }, body: JSON.stringify({ name: 'CEO', email: 'ceo@example.test', password: 'Correct-Horse-Battery-CEO' }) })
+  assert.equal(bootstrap.response.status, 201)
+  assert.deepEqual((await request(baseUrl, '/api/auth/setup-status', new Map())).body, { needsCeoSetup: false })
+  const provisioned = await request(baseUrl, '/api/users', ceoJar, { method: 'POST', headers: { 'x-csrf-token': ceoJar.get('ems_csrf') || '' }, body: JSON.stringify({ name: 'Team Lead', email: 'lead@example.test', password: 'Correct-Horse-Battery-Lead' }) })
+  assert.equal(provisioned.response.status, 201)
+  const secondBootstrapJar = new Map<string, string>()
+  await request(baseUrl, '/api/auth/csrf', secondBootstrapJar)
+  const secondBootstrap = await request(baseUrl, '/api/auth/bootstrap-ceo', secondBootstrapJar, { method: 'POST', headers: { 'x-csrf-token': secondBootstrapJar.get('ems_csrf') || '' }, body: JSON.stringify({ name: 'Second CEO', email: 'second-ceo@example.test', password: 'Correct-Horse-Battery-CEO' }) })
+  assert.equal(secondBootstrap.response.status, 400)
 
   const leadJar = await login(baseUrl, 'lead@example.test', 'Correct-Horse-Battery-Lead')
   const first = await request(baseUrl, '/api/candidates', leadJar, { method: 'POST', headers: { 'x-csrf-token': leadJar.get('ems_csrf') || '' }, body: JSON.stringify(candidate('candidate-a', 'Candidate A')) })
@@ -78,7 +89,6 @@ try {
   assert.equal(imported.response.status, 200)
   assert.equal((imported.body as unknown[]).length, 2)
 
-  const ceoJar = await login(baseUrl, 'ceo@example.test', 'Correct-Horse-Battery-CEO')
   const visible = await request(baseUrl, '/api/candidates', ceoJar)
   assert.equal(visible.response.status, 200)
   assert.deepEqual(new Set((visible.body as Array<{ id: string }>).map(item => item.id)), new Set(['candidate-a', 'candidate-b']))

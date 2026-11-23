@@ -16,6 +16,7 @@ export class SqliteAuthRepository implements AuthRepository {
   async touchSession(tokenHash: string): Promise<void> { this.db.prepare('UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?').run(new Date().toISOString(), tokenHash) }
   async deleteSession(tokenHash: string): Promise<void> { this.db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(tokenHash) }
   async countUsersByRole(role: UserRole): Promise<number> { const row = this.db.prepare('SELECT COUNT(*) AS count FROM users WHERE role = ?').get(role) as { count: number }; return row.count }
+  async countUsers(): Promise<number> { const row = this.db.prepare('SELECT COUNT(*) AS count FROM users').get() as { count: number }; return row.count }
   async checkHealth(): Promise<void> { this.db.prepare('SELECT 1').get() }
   async close(): Promise<void> { this.db.close() }
 }

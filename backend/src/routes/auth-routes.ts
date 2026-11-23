@@ -7,6 +7,8 @@ import { AuthService } from '../services/auth-service.js'
 export function authRoutes(service: AuthService, config: AppConfig) {
   const router = Router(); const controller = authController(service, config)
   router.get('/csrf', controller.csrf)
+  router.get('/setup-status', controller.setupStatus)
+  router.post('/bootstrap-ceo', requirePreAuthCsrf(service), controller.bootstrapCeo)
   router.post('/login', requirePreAuthCsrf(service), controller.login)
   router.get('/me', requireAuth(service), controller.me)
   router.post('/logout', requireAuth(service), requireCsrf(service), controller.logout)

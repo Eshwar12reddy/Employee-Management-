@@ -13,6 +13,7 @@ export interface AuthRepository {
   touchSession(tokenHash: string): Promise<void>
   deleteSession(tokenHash: string): Promise<void>
   countUsersByRole(role: UserRole): Promise<number>
+  countUsers(): Promise<number>
   checkHealth(): Promise<void>
   close(): Promise<void>
 }

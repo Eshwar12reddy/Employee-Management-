@@ -46,7 +46,7 @@ With no `DATABASE_URL`, the backend creates `data/candidates.sqlite`, applies th
 npm run dev
 ```
 
-Open `http://localhost:5173`. The frontend proxies `/api` to the backend. Provision the first account with the secure CLI, then sign in with its email and password:
+Open `http://localhost:5173`. The frontend proxies `/api` to the backend. On a fresh database, the sign-in screen provides a one-time first CEO setup form. The CLI remains available for secure provisioning:
 
 ```powershell
 npm --workspace backend run provision:user -- --role=CEO
@@ -69,10 +69,12 @@ Login creates a server-side session in PostgreSQL. The session is sent only in a
 |---|---|---|
 | GET | `/api/health` | Database reachability check |
 | GET | `/api/auth/csrf` | Establish CSRF cookie |
+| GET | `/api/auth/setup-status` | Report whether the one-time CEO setup is still available |
+| POST | `/api/auth/bootstrap-ceo` | Create the first CEO account only, then start its session |
 | POST | `/api/auth/login` | Start an individual session |
 | GET | `/api/auth/me` | Return the current user and role |
 | POST | `/api/auth/logout` | End the current session |
-| POST | `/api/users` | CEO-only Team Lead provisioning endpoint |
+| POST | `/api/users` | CEO-only Team Lead provisioning endpoint; also available from the CEO UI |
 | GET | `/api/candidates` | List candidates, newest updated first |
 | GET | `/api/candidates/:id` | Read one candidate |
 | POST | `/api/candidates` | Create or update one candidate by its existing id |

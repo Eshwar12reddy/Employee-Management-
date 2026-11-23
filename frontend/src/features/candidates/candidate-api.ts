@@ -31,6 +31,9 @@ async function request(path: string, init: RequestInit = {}) {
 export const ensureCsrf = async () => { await request('/auth/csrf') }
 export const getCurrentUser = async (): Promise<AppUser | null> => { try { return (await (await request('/auth/me')).json() as { user: AppUser }).user } catch (error) { if (error instanceof UnauthorizedError) return null; throw error } }
 export const loginUser = async (email: string, password: string): Promise<AppUser> => { await ensureCsrf(); return (await (await request('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) })).json() as { user: AppUser }).user }
+export const getSetupStatus = async (): Promise<{ needsCeoSetup: boolean }> => (await (await request('/auth/setup-status')).json() as { needsCeoSetup: boolean })
+export const createFirstCeo = async (name: string, email: string, password: string): Promise<AppUser> => { await ensureCsrf(); return (await (await request('/auth/bootstrap-ceo', { method: 'POST', body: JSON.stringify({ name, email, password }) })).json() as { user: AppUser }).user }
+export const createTeamLead = async (name: string, email: string, password: string): Promise<AppUser> => { await ensureCsrf(); return (await (await request('/users', { method: 'POST', body: JSON.stringify({ name, email, password }) })).json() as { user: AppUser }).user }
 export const logoutUser = async () => { await ensureCsrf(); await request('/auth/logout', { method: 'POST' }) }
 
 export const api = (path = '', init: RequestInit = {}) => request(`/candidates${path}`, init)
