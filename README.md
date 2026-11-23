@@ -7,7 +7,7 @@ React/Vite frontend and Express API for candidate evaluation reports. Candidate 
 ```text
 frontend/
   src/App.tsx                         Existing list, form, dashboard, import, and print workflow
-  src/features/candidates/             Candidate types, API client, and browser helpers
+  src/features/candidates/             Candidate types, auth/API client, sync, and browser helpers
   src/styles.css                       Existing visual design
   vite.config.ts                       Dev proxy and Vite build configuration
 backend/
@@ -16,7 +16,7 @@ backend/
   src/controllers/                     HTTP response handling
   src/db/                              Migration runner and repository contract
   src/repositories/                    PostgreSQL and local SQLite implementations
-  src/services/candidate-service.ts    Validation, timestamps, and bulk-upsert behavior
+  src/services/                        Authentication, roles, validation, timestamps, and bulk-upsert behavior
   migrations/                          Versioned PostgreSQL/SQLite migrations
   src/scripts/                         Migration, backup, and import commands
 render.yaml                            Render Web Service, Static Site, and PostgreSQL blueprint
@@ -36,7 +36,7 @@ npm install
 Copy-Item .env.example .env
 ```
 
-`APP_ACCESS_KEY` is a user-entered shared workspace key. It is never compiled into the frontend or read from a `VITE_*` variable. In local development it can be left empty while `ALLOW_INSECURE_LOCAL=true`; production requires it.
+Individual accounts replace the shared unlock flow. `APP_ACCESS_KEY` remains in configuration temporarily as a legacy deployment setting during the migration, but is not used to authorize candidate requests. It is never compiled into the frontend or read from a `VITE_*` variable.
 
 ## Local development
 
@@ -46,20 +46,33 @@ With no `DATABASE_URL`, the backend creates `data/candidates.sqlite`, applies th
 npm run dev
 ```
 
-Open `http://localhost:5173`. The frontend proxies `/api` to the backend. To use an access key locally, set `APP_ACCESS_KEY` and enter that key in the unlock prompt. To use PostgreSQL locally, set `DATABASE_URL` and run:
+Open `http://localhost:5173`. The frontend proxies `/api` to the backend. Provision the first account with the secure CLI, then sign in with its email and password:
+
+```powershell
+npm --workspace backend run provision:user -- --role=CEO
+```
+
+The CLI prompts for the name, email, and password without storing the password. Provision Team Leads with `--role=TEAM_LEAD`. For non-interactive provisioning, set `PROVISION_PASSWORD` only in the current shell. To use PostgreSQL locally, set `DATABASE_URL` and run:
 
 ```powershell
 npm run migrate
 npm run dev
 ```
 
-## API contract
+## Authentication and API contract
 
-All candidate routes require `x-access-key` when `APP_ACCESS_KEY` is configured. `GET /api/health` is unauthenticated and only reports reachability plus the database driver.
+Login creates a server-side session in PostgreSQL. The session is sent only in a Secure/HttpOnly cookie; the frontend does not store passwords, session tokens, or access keys. A separate CSRF cookie is paired with the `x-csrf-token` header for state-changing requests. CORS allows only `FRONTEND_ORIGIN` and credentialed requests.
+
+`CEO` accounts can read all candidates but are read-only. `TEAM_LEAD` accounts can create, import, update, and delete candidates they own. Legacy records without an owner can be claimed by the first Team Lead who updates them. The backend enforces these rules; hiding buttons in the frontend is only a usability layer.
 
 | Method | Route | Behavior |
 |---|---|---|
 | GET | `/api/health` | Database reachability check |
+| GET | `/api/auth/csrf` | Establish CSRF cookie |
+| POST | `/api/auth/login` | Start an individual session |
+| GET | `/api/auth/me` | Return the current user and role |
+| POST | `/api/auth/logout` | End the current session |
+| POST | `/api/users` | CEO-only Team Lead provisioning endpoint |
 | GET | `/api/candidates` | List candidates, newest updated first |
 | GET | `/api/candidates/:id` | Read one candidate |
 | POST | `/api/candidates` | Create or update one candidate by its existing id |
@@ -73,7 +86,8 @@ Invalid JSON, oversized bodies, missing IDs, missing records, and unauthorized r
 - PostgreSQL stores `id`, `updated_at`, and the complete candidate payload in a JSONB `payload` column. An index supports newest-first listing, and a check constraint keeps the JSON id aligned with the primary key.
 - SQLite uses the same logical schema with a TEXT JSON payload for local-only development.
 - Migrations are versioned in `backend/migrations/` and run automatically at API startup. They can also be run explicitly with `npm run migrate`.
-- Browser `localStorage` remains the offline cache (`clyptus-candidates`) and draft store (`clyptus-draft`) so the current offline workflow is preserved. The access key is held in `sessionStorage`, not bundled into the application.
+- Browser `localStorage` remains only an offline cache (`clyptus-candidates`) and draft store (`clyptus-draft`). After authentication, the app fetches PostgreSQL data and replaces the cache; it does not use stale local data as the online source of truth.
+- Open views poll `/api/candidates` every 15 seconds and also react to same-origin BroadcastChannel/storage notifications. Polling is the reliable cross-browser/device path for CEO visibility.
 - Photos are retained in the candidate payload as data URLs or supported links. The frontend shrinks large image uploads before sending them; the API has a 4 MB JSON body limit.
 - Excel/CSV import still deduplicates by normalized name + email in the browser. The candidate list also exports the complete evaluation dataset to a timestamped `.xlsx` workbook. Bulk API calls only upsert submitted IDs and never delete unrelated rows.
 
@@ -83,7 +97,7 @@ Back up local SQLite before moving to PostgreSQL:
 npm run backup:local -- --output=backups/candidates.json
 ```
 
-Set production `DATABASE_URL`, then import and verify row counts:
+Set production `DATABASE_URL`, then import and verify row counts. The import command uses a migration actor and leaves imported records unowned so a Team Lead can manage them:
 
 ```powershell
 $env:DATABASE_URL = "postgresql://user:password@host/database?sslmode=require"
@@ -113,6 +127,9 @@ After creating the Blueprint, configure these values in the Render Dashboard:
 | `APP_ACCESS_KEY` | Long random value; never commit it |
 | `FRONTEND_ORIGIN` | Exact deployed frontend origin, e.g. `https://clyptus-frontend.onrender.com` |
 | `JSON_BODY_LIMIT` | `4mb` |
+| `SESSION_TTL_HOURS` | `12` |
+| `COOKIE_SECURE` | `true` |
+| `COOKIE_SAME_SITE` | `none` for separate Render origins |
 
 The service must bind to `0.0.0.0` and uses Render's `PORT` automatically. It runs migrations at startup and does not use SQLite in production.
 
@@ -129,14 +146,16 @@ Because `VITE_API_BASE_URL` is public build configuration, it must not contain c
 ```powershell
 npm run typecheck
 npm run build
+npm run test:auth --workspace backend
 Invoke-WebRequest http://localhost:3001/api/health
 ```
 
-To verify persistence after a deploy, create a disposable candidate, reload the frontend, query `GET /api/candidates` with the access key, redeploy/restart the API, and query again. Do not use real employee data for smoke checks.
+To verify persistence after a deploy, provision a CEO and Team Lead, create a disposable candidate as the Team Lead, then sign in as the CEO from a separate browser/device and confirm the record appears. Do not use real employee data for smoke checks.
 
 Common issues:
 
-- `401 Access key required`: enter the exact API `APP_ACCESS_KEY`; do not put it in `VITE_API_BASE_URL`.
+- `401 Authentication required`: sign in again; sessions are per browser and stored in HttpOnly cookies.
+- `403 CSRF validation failed`: reload the frontend so it can establish a CSRF cookie, then sign in again.
 - CORS errors: set `FRONTEND_ORIGIN` to the exact scheme + hostname of the Static Site, without a trailing path.
 - `503 Database is unavailable`: verify `DATABASE_URL`, database availability, and Render region/network settings; API startup logs intentionally do not print credentials.
 - Empty local list after clearing site data: browser cache and drafts are local fallback data; restore shared records from PostgreSQL or a backup.

@@ -11,16 +11,17 @@ if (!['update', 'skip'].includes(onDuplicate)) throw new Error('--on-duplicate m
 const parsed: unknown = JSON.parse(await readFile(path.resolve(fileArg), 'utf8'))
 if (!Array.isArray(parsed)) throw new Error('Backup must contain a JSON array')
 const config = readConfig()
-const repository = await createRepository(config)
-const before = (await repository.list()).length
+const database = await createRepository(config)
+const actor = { id: 'migration', role: 'CEO' as const }
+const before = (await database.candidates.list(actor)).length
 const candidates = parsed.filter((candidate): candidate is Record<string, unknown> => !!candidate && typeof candidate === 'object' && typeof (candidate as Record<string, unknown>).id === 'string')
 const toImport = []
 let skipped = 0
 for (const candidate of candidates) {
-  if (onDuplicate === 'skip' && await repository.get(String(candidate.id))) { skipped++; continue }
+  if (onDuplicate === 'skip' && await database.candidates.get(String(candidate.id), actor)) { skipped++; continue }
   toImport.push({ ...candidate, updatedAt: typeof candidate.updatedAt === 'string' ? candidate.updatedAt : new Date().toISOString() } as { id: string; updatedAt: string; [key: string]: unknown })
 }
-await repository.upsertMany(toImport)
-const after = (await repository.list()).length
-await repository.close()
+await database.candidates.upsertMany(toImport, actor)
+const after = (await database.candidates.list(actor)).length
+await database.close()
 console.log(`Imported ${toImport.length} records; skipped ${skipped}; row count ${before} -> ${after}.`)

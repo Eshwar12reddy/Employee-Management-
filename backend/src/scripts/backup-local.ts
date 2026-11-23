@@ -5,11 +5,11 @@ import { createRepository } from '../db/create-repository.js'
 
 const config = readConfig()
 const sqliteConfig = { ...config, databaseDriver: 'sqlite' as const, databaseUrl: '', sqlitePath: process.env.SQLITE_PATH || config.sqlitePath }
-const repository = await createRepository(sqliteConfig)
+const database = await createRepository(sqliteConfig)
 const outputArg = process.argv.find(value => value.startsWith('--output='))?.slice('--output='.length)
 const output = path.resolve(outputArg || `backups/candidates-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
-const candidates = await repository.list()
+const candidates = await database.candidates.list({ id: 'backup', role: 'CEO' })
 await mkdir(path.dirname(output), { recursive: true })
 await writeFile(output, JSON.stringify(candidates, null, 2), 'utf8')
-await repository.close()
+await database.close()
 console.log(`Backed up ${candidates.length} candidate records to ${output}`)

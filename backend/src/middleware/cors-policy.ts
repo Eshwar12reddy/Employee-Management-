@@ -4,8 +4,9 @@ import type { AppConfig } from '../config/environment.js'
 export function corsPolicy(config: AppConfig) {
   return cors({
     origin: config.frontendOrigin,
+    credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'x-access-key'],
+    allowedHeaders: ['Content-Type', 'x-csrf-token', 'x-access-key'],
     maxAge: 600,
   })
 }

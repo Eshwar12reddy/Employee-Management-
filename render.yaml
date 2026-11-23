@@ -18,6 +18,12 @@ services:
         sync: false
       - key: JSON_BODY_LIMIT
         value: 4mb
+      - key: SESSION_TTL_HOURS
+        value: 12
+      - key: COOKIE_SECURE
+        value: true
+      - key: COOKIE_SAME_SITE
+        value: none
 
   - type: static
     name: clyptus-frontend

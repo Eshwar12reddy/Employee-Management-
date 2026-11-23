@@ -8,19 +8,25 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/server.js",
+    "test:auth": "tsx src/scripts/auth-smoke.ts",
     "migrate": "tsx src/scripts/migrate.ts",
+    "provision:user": "tsx src/scripts/provision-user.ts",
     "backup:local": "tsx src/scripts/backup-local.ts",
     "import:backup": "tsx src/scripts/import-backup.ts"
   },
   "dependencies": {
+    "bcryptjs": "^2.4.3",
     "better-sqlite3": "^11.7.0",
+    "cookie": "^1.0.2",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "pg": "^8.13.1"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
     "@types/better-sqlite3": "^7.6.12",
+    "@types/cookie": "^0.6.0",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.2",

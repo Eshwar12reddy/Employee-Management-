@@ -2,6 +2,7 @@ import 'dotenv/config'
 import path from 'node:path'
 
 export type DatabaseDriver = 'postgres' | 'sqlite'
+export type CookieSameSite = 'lax' | 'strict' | 'none'
 
 export type AppConfig = {
   port: number
@@ -13,11 +14,14 @@ export type AppConfig = {
   appAccessKey: string
   allowInsecureLocal: boolean
   jsonBodyLimit: string
+  sessionTtlHours: number
+  cookieSecure: boolean
+  cookieSameSite: CookieSameSite
 }
 
 export function readConfig(): AppConfig {
   const nodeEnv = process.env.NODE_ENV || 'development'
-  const databaseUrl = process.env.DATABASE_URL || ''
+  const databaseUrl = (process.env.DATABASE_URL || '').trim()
   const databaseDriver: DatabaseDriver = databaseUrl ? 'postgres' : 'sqlite'
   const appAccessKey = process.env.APP_ACCESS_KEY || ''
 
@@ -38,5 +42,8 @@ export function readConfig(): AppConfig {
     appAccessKey,
     allowInsecureLocal: nodeEnv !== 'production' && process.env.ALLOW_INSECURE_LOCAL !== 'false',
     jsonBodyLimit: process.env.JSON_BODY_LIMIT || '4mb',
+    sessionTtlHours: Number(process.env.SESSION_TTL_HOURS || 12),
+    cookieSecure: process.env.COOKIE_SECURE ? process.env.COOKIE_SECURE === 'true' : nodeEnv === 'production',
+    cookieSameSite: (process.env.COOKIE_SAME_SITE || (nodeEnv === 'production' ? 'none' : 'lax')) as CookieSameSite,
   }
 }
