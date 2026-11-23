@@ -3,12 +3,13 @@ import * as XLSX from 'xlsx'
 import { CalendarDays, Check, CirclePlus, FileDown, Flag, FolderKanban, Pencil, Printer, Save, Search, Settings2, ShieldCheck, Star, Target, Trash2, Upload, UserRound, BriefcaseBusiness, ArrowLeft, Eye, UserPlus, X, ArrowUpDown } from 'lucide-react'
 import './styles.css'
 import type { Candidate, Project, Report, View } from './features/candidates/candidate-types'
-import { api, LockedError, saveAccessKey, upsertInBatches } from './features/candidates/candidate-api'
+import { api, ApiError, cacheCandidateList, hasMigratedLocalCandidates, LockedError, markLocalCandidatesMigrated, readCandidateCache, saveAccessKey, upsertInBatches } from './features/candidates/candidate-api'
 import { exportCandidatesToExcel } from './features/candidates/candidate-export'
 import { blankReport, dateInputValue, formatDate, photoLink, shrinkPhoto, skillLibrary, uid, workingDays } from './features/candidates/candidate-utils'
+import { announceCandidatesChanged, subscribeToCandidateChanges } from './features/candidates/candidate-sync'
 
 function App() {
-  const [candidates, setCandidates] = useState<Candidate[]>(() => { try { return JSON.parse(localStorage.getItem('clyptus-candidates') || '[]').map((candidate: Candidate) => ({ ...candidate, designation: 'AI Intern' })) } catch { return [] } })
+  const [candidates, setCandidates] = useState<Candidate[]>(() => readCandidateCache().map(candidate => ({ ...candidate, designation: 'AI Intern' })))
   const [view, setView] = useState<View>('list')
   const [selectedId, setSelectedId] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -20,36 +21,59 @@ function App() {
   const update = <K extends keyof Report>(key: K, value: Report[K]) => setDraft(d => ({ ...d, [key]: value }))
   const [dbStatus, setDbStatus] = useState<'checking' | 'connected' | 'offline' | 'locked'>('checking')
   const [keyRejected, setKeyRejected] = useState(false)
-  const cacheLocally = (items: Candidate[]) => { try { localStorage.setItem('clyptus-candidates', JSON.stringify(items)); return true } catch { return false } }
   const flash = (message: string, ms = 2600) => { setNotice(message); setTimeout(() => setNotice(''), ms) }
   const markFailure = (error: unknown) => setDbStatus(error instanceof LockedError ? 'locked' : 'offline')
-  const load = async (localItems: Candidate[]) => {
+  const load = async (localItems: Candidate[] = [], allowLocalMigration = false) => {
     try {
       let items: Candidate[] = await (await api()).json()
       setDbStatus('connected'); setKeyRejected(false)
-      if (!items.length) {
+      if (!items.length && allowLocalMigration && localItems.length && !hasMigratedLocalCandidates()) {
         // First connection: move candidates that were only stored in this browser into the database.
         const pending = await Promise.all(localItems.filter(c => c?.id).map(async c => ({ ...c, photo: await shrinkPhoto(c.photo || '') })))
-        if (!pending.length) return
+        if (!pending.length) return true
         items = await upsertInBatches(pending)
+        markLocalCandidatesMigrated()
       }
-      setCandidates(items); cacheLocally(items)
-    } catch (error) { markFailure(error) }
+      if (items.length) markLocalCandidatesMigrated()
+      setCandidates(items); cacheCandidateList(items)
+      return true
+    } catch (error) {
+      markFailure(error)
+      if (error instanceof LockedError) return false
+      flash(error instanceof ApiError ? `Could not refresh server data: ${error.message}` : 'Could not refresh server data. Showing the offline cache.', 4500)
+      return false
+    }
   }
-  useEffect(() => { load(candidates) }, [])
+  useEffect(() => {
+    const initialCandidates = readCandidateCache()
+    void load(initialCandidates, true)
+    return subscribeToCandidateChanges(() => { void load([], false) })
+  }, [])
   const unlock = async (key: string) => {
     saveAccessKey(key)
     setKeyRejected(true) // cleared by load() if the key works
-    await load(candidates)
+    await load(candidates, true)
   }
-  // Updates the screen and browser cache, then writes the change to the database.
-  const persist = async (items: Candidate[], sync: () => Promise<unknown>): Promise<'db' | 'local' | null> => {
-    setCandidates(items)
-    const cached = cacheLocally(items)
-    try { await sync(); setDbStatus('connected'); return 'db' }
-    catch (error) { markFailure(error); if (cached) return 'local'; flash('Could not save: database unavailable and browser storage is full.', 4000); return null }
+  // The API is authoritative when online. Only a failed non-authenticated request falls back to the offline cache.
+  const persist = async (items: Candidate[], sync: () => Promise<unknown>, reason: 'saved' | 'deleted' | 'imported'): Promise<'db' | 'local' | null> => {
+    try {
+      const result = await sync()
+      const serverItems = Array.isArray(result) ? result as Candidate[] : items
+      setCandidates(serverItems)
+      cacheCandidateList(serverItems)
+      setDbStatus('connected')
+      announceCandidatesChanged(reason)
+      return 'db'
+    } catch (error) {
+      markFailure(error)
+      if (error instanceof LockedError) { flash('Access key required. Enter it in this tab to save to the server.', 4000); return null }
+      if (error instanceof ApiError) { flash(`The server rejected the change: ${error.message}`, 4500); return null }
+      const cached = cacheCandidateList(items)
+      if (cached) { setCandidates(items); flash('Saved locally only. The server could not be reached.', 4500); return 'local' }
+      flash('Could not save: the API is unavailable and browser storage is full.', 4500)
+      return null
+    }
   }
-  const offlineNote = dbStatus === 'locked' ? ' (this device only: enter the access key to sync)' : ' (this device only: database unavailable)'
   const openNew = () => { setEditingId(null); setDraft(blankReport()); setView('form') }
   const openEdit = (candidate: Candidate) => { const { id: _id, updatedAt: _updated, ...report } = candidate; setEditingId(candidate.id); setDraft(report); setView('form') }
   const saveCandidate = async (asDraft = false) => {
@@ -59,11 +83,11 @@ function App() {
     if (missing) { setNotice(`Please enter the ${missing[1]}.`); setTimeout(() => setNotice(''), 3000); return }
     const next: Candidate = { ...draft, photo: await shrinkPhoto(draft.photo), designation: 'AI Intern', id: editingId || uid(), updatedAt: new Date().toISOString() }
     const items = editingId ? candidates.map(c => c.id === editingId ? next : c) : [next, ...candidates]
-    const saved = await persist(items, () => api('', { method: 'POST', body: JSON.stringify(next) }))
+    const saved = await persist(items, async () => { await api('', { method: 'POST', body: JSON.stringify(next) }); return next }, 'saved')
     if (!saved) return
-    setSelectedId(next.id); setView('list'); flash((editingId ? 'Candidate updated' : 'Candidate saved') + (saved === 'db' ? ' successfully' : offlineNote), saved === 'db' ? 2600 : 4000)
+    setSelectedId(next.id); setView('list'); if (saved === 'db') flash(editingId ? 'Candidate updated successfully' : 'Candidate saved successfully')
   }
-  const removeCandidate = async (candidate: Candidate) => { if (confirm(`Delete ${candidate.name}'s evaluation?`)) { const saved = await persist(candidates.filter(c => c.id !== candidate.id), () => api(`/${encodeURIComponent(candidate.id)}`, { method: 'DELETE' })); if (selectedId === candidate.id) setSelectedId(''); if (saved) flash(saved === 'db' ? 'Candidate deleted' : `Candidate deleted${offlineNote}`, saved === 'db' ? 2200 : 4000) } }
+  const removeCandidate = async (candidate: Candidate) => { if (confirm(`Delete ${candidate.name}'s evaluation?`)) { const saved = await persist(candidates.filter(c => c.id !== candidate.id), () => api(`/${encodeURIComponent(candidate.id)}`, { method: 'DELETE' }), 'deleted'); if (selectedId === candidate.id) setSelectedId(''); if (saved === 'db') flash('Candidate deleted') } }
   const openDashboard = (candidate: Candidate) => { setSelectedId(candidate.id); setView('dashboard') }
   const importCandidates = async (file: File) => {
     try {
@@ -80,8 +104,8 @@ function App() {
       rows.forEach(row => { const key = `${String(row[0]).trim().toLowerCase()}|${String(row[2]).trim().toLowerCase()}`; if (!existing.has(key)) { existing.add(key); imported.push({ ...blankReport(), name: String(row[0]).trim(), designation: 'AI Intern', phone: String(row[1] || '').trim(), email: String(row[2] || '').trim(), bloodGroup: String(row[3] || '').trim(), photo: photoLink(row[4]), rating: 0, technicalRating: 0, id: uid(), updatedAt: new Date().toISOString() }) } })
       if (!imported.length && updated.every((candidate, index) => candidate.photo === candidates[index].photo)) { setNotice('No new candidates or photos found in the workbook.'); setTimeout(() => setNotice(''), 2600); return }
       const changed = [...imported, ...updated.filter((candidate, index) => candidate !== candidates[index])]
-      const saved = await persist([...imported, ...updated], () => upsertInBatches(changed))
-      if (saved) flash(`${imported.length ? `${imported.length} candidate${imported.length === 1 ? '' : 's'} imported` : 'Candidate photos updated'}${saved === 'db' ? ' successfully' : offlineNote}`, 3000)
+      const saved = await persist([...imported, ...updated], () => upsertInBatches(changed), 'imported')
+      if (saved === 'db') flash(`${imported.length ? `${imported.length} candidate${imported.length === 1 ? '' : 's'} imported` : 'Candidate photos updated'} successfully`, 3000)
     } catch { setNotice('Could not read this workbook. Please choose a valid .xlsx file.'); setTimeout(() => setNotice(''), 3000) }
   }
   return <div className="app-shell">
