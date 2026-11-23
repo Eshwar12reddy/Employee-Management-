@@ -3,30 +3,16 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "workspaces": ["frontend", "backend"],
   "scripts": {
-    "dev": "concurrently -k \"tsx server.ts\" \"vite\"",
-    "server": "tsx server.ts",
-    "build": "tsc -b && vite build",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "@neondatabase/serverless": "^1.2.1",
-    "@vitejs/plugin-react": "latest",
-    "better-sqlite3": "latest",
-    "express": "latest",
-    "lucide-react": "latest",
-    "react": "latest",
-    "react-dom": "latest",
-    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+    "dev": "concurrently -k \"npm run dev --workspace backend\" \"npm run dev --workspace frontend\"",
+    "build": "npm run build --workspace frontend && npm run build --workspace backend",
+    "typecheck": "npm run typecheck --workspace frontend && npm run typecheck --workspace backend",
+    "migrate": "npm run migrate --workspace backend",
+    "backup:local": "npm run backup:local --workspace backend",
+    "import:backup": "npm run import:backup --workspace backend"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "latest",
-    "@types/express": "latest",
-    "@types/react": "latest",
-    "@types/react-dom": "latest",
-    "concurrently": "latest",
-    "tsx": "latest",
-    "typescript": "latest",
-    "vite": "latest"
+    "concurrently": "^9.1.2"
   }
 }

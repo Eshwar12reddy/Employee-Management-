@@ -1,67 +1,11 @@
-import { StrictMode, useEffect, useMemo, useRef, useState } from 'react'
-import { createRoot } from 'react-dom/client'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as XLSX from 'xlsx'
 import { CalendarDays, Check, CirclePlus, FileDown, Flag, FolderKanban, Pencil, Printer, Save, Search, Settings2, ShieldCheck, Star, Target, Trash2, Upload, UserRound, BriefcaseBusiness, ArrowLeft, Eye, UserPlus, X, ArrowUpDown } from 'lucide-react'
 import './styles.css'
-
-type Project = { name: string; status: 'Active' | 'Completed' | 'On Hold' }
-type Report = { name: string; designation: string; phone: string; email: string; bloodGroup: string; joining: string; experience: string; team: string; photo: string; projects: Project[]; rating: number; technicalRating: number; capabilities: string[]; skills: string[]; worth: number; worthPoints: string[]; summary: string; recommendation: string; remarks: string; reportDate: string }
-type Candidate = Report & { id: string; updatedAt: string }
-type View = 'list' | 'form' | 'dashboard'
-
-const todayInput = () => new Date().toISOString().slice(0, 10)
-const formatDate = (value: string) => { const date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T00:00:00`) : new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) }
-const dateInputValue = (value: string) => { if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value; const date = new Date(value); return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10) }
-const workingDays = (value: string) => { const raw = dateInputValue(value); if (!raw) return 0; const start = new Date(`${raw}T00:00:00`); const end = new Date(); end.setHours(0, 0, 0, 0); if (start > end) return 0; let count = 0; for (const day = new Date(start); day <= end; day.setDate(day.getDate() + 1)) if (day.getDay() !== 0 && day.getDay() !== 6) count++; return count }
-const photoLink = (value: unknown) => { const url = String(value || '').trim(); const match = url.match(/[?&]id=([^&]+)/) || url.match(/\/d\/([^/]+)/); return match ? `https://drive.google.com/thumbnail?id=${match[1]}&sz=w400` : url }
-const blankReport = (): Report => ({ name: '', designation: '', phone: '', email: '', bloodGroup: '', joining: '', experience: '', team: '', photo: '', projects: [{ name: '', status: 'Active' }], rating: 1, technicalRating: 1, capabilities: [''], skills: [''], worth: 0, worthPoints: [''], summary: '', recommendation: 'Continue in current project', remarks: '', reportDate: todayInput() })
-const uid = () => crypto.randomUUID?.() || Math.random().toString(36).slice(2)
-const skillLibrary: Record<string, string[]> = { 'AI Engineering': ['Python', 'Machine Learning', 'Deep Learning', 'LLMs', 'Prompt Engineering', 'RAG', 'LangChain', 'Vector Databases'], Frontend: ['HTML', 'CSS', 'JavaScript', 'TypeScript', 'React', 'Next.js', 'Tailwind CSS', 'Accessibility'], Backend: ['Node.js', 'Python', 'Java', 'C#', '.NET', 'REST APIs', 'GraphQL', 'Microservices'], 'Hosting & DevOps': ['AWS', 'Azure', 'Google Cloud', 'Docker', 'Kubernetes', 'CI/CD', 'GitHub Actions', 'Linux'], Databases: ['PostgreSQL', 'MySQL', 'MongoDB', 'Redis', 'SQL Server', 'DynamoDB', 'Database Design', 'SQL'], General: ['Git', 'Agile', 'Testing', 'Communication', 'Business Analysis', 'System Design'] }
-
-const ACCESS_KEY_STORAGE = 'clyptus-access-key'
-const readAccessKey = () => { try { return localStorage.getItem(ACCESS_KEY_STORAGE) || '' } catch { return '' } }
-class LockedError extends Error {}
-// Every database call goes through here so the access key is always sent.
-const api = async (query = '', init: RequestInit = {}) => {
-  const headers = new Headers(init.headers)
-  const key = readAccessKey()
-  if (key) headers.set('x-access-key', key)
-  if (init.body) headers.set('Content-Type', 'application/json')
-  const response = await fetch(`/api/candidates${query}`, { ...init, headers })
-  if (response.status === 401) throw new LockedError('Access key required')
-  if (!response.ok) throw new Error(`API ${response.status}`)
-  return response
-}
-// Hosting limits each request to ~4.5 MB, so large uploads are split into batches.
-const MAX_BATCH_BYTES = 3_000_000
-const upsertInBatches = async (items: Candidate[]) => {
-  let batch: Candidate[] = [], size = 0, latest: Candidate[] = []
-  const flush = async () => { if (!batch.length) return; latest = await (await api('', { method: 'PUT', body: JSON.stringify(batch) })).json(); batch = []; size = 0 }
-  for (const item of items) {
-    const itemSize = JSON.stringify(item).length
-    if (size + itemSize > MAX_BATCH_BYTES) await flush()
-    batch.push(item); size += itemSize
-  }
-  await flush()
-  return latest
-}
-// Shrinks photos to a small JPEG so records stay well under storage and request limits.
-const PHOTO_MAX_SIDE = 480
-const shrinkPhoto = (src: string) => new Promise<string>(resolve => {
-  if (!src.startsWith('data:image') || src.length < 150_000) return resolve(src)
-  const image = new Image()
-  image.onload = () => {
-    const scale = Math.min(1, PHOTO_MAX_SIDE / Math.max(image.width, image.height))
-    const canvas = document.createElement('canvas')
-    canvas.width = Math.round(image.width * scale); canvas.height = Math.round(image.height * scale)
-    const context = canvas.getContext('2d')
-    if (!context) return resolve(src)
-    context.drawImage(image, 0, 0, canvas.width, canvas.height)
-    resolve(canvas.toDataURL('image/jpeg', 0.82))
-  }
-  image.onerror = () => resolve(src)
-  image.src = src
-})
+import type { Candidate, Project, Report, View } from './features/candidates/candidate-types'
+import { api, LockedError, saveAccessKey, upsertInBatches } from './features/candidates/candidate-api'
+import { exportCandidatesToExcel } from './features/candidates/candidate-export'
+import { blankReport, dateInputValue, formatDate, photoLink, shrinkPhoto, skillLibrary, uid, workingDays } from './features/candidates/candidate-utils'
 
 function App() {
   const [candidates, setCandidates] = useState<Candidate[]>(() => { try { return JSON.parse(localStorage.getItem('clyptus-candidates') || '[]').map((candidate: Candidate) => ({ ...candidate, designation: 'AI Intern' })) } catch { return [] } })
@@ -94,7 +38,7 @@ function App() {
   }
   useEffect(() => { load(candidates) }, [])
   const unlock = async (key: string) => {
-    try { localStorage.setItem(ACCESS_KEY_STORAGE, key.trim()) } catch { /* key then lasts only for this page */ }
+    saveAccessKey(key)
     setKeyRejected(true) // cleared by load() if the key works
     await load(candidates)
   }
@@ -119,7 +63,7 @@ function App() {
     if (!saved) return
     setSelectedId(next.id); setView('list'); flash((editingId ? 'Candidate updated' : 'Candidate saved') + (saved === 'db' ? ' successfully' : offlineNote), saved === 'db' ? 2600 : 4000)
   }
-  const removeCandidate = async (candidate: Candidate) => { if (confirm(`Delete ${candidate.name}'s evaluation?`)) { const saved = await persist(candidates.filter(c => c.id !== candidate.id), () => api(`?id=${encodeURIComponent(candidate.id)}`, { method: 'DELETE' })); if (selectedId === candidate.id) setSelectedId(''); if (saved) flash(saved === 'db' ? 'Candidate deleted' : `Candidate deleted${offlineNote}`, saved === 'db' ? 2200 : 4000) } }
+  const removeCandidate = async (candidate: Candidate) => { if (confirm(`Delete ${candidate.name}'s evaluation?`)) { const saved = await persist(candidates.filter(c => c.id !== candidate.id), () => api(`/${encodeURIComponent(candidate.id)}`, { method: 'DELETE' })); if (selectedId === candidate.id) setSelectedId(''); if (saved) flash(saved === 'db' ? 'Candidate deleted' : `Candidate deleted${offlineNote}`, saved === 'db' ? 2200 : 4000) } }
   const openDashboard = (candidate: Candidate) => { setSelectedId(candidate.id); setView('dashboard') }
   const importCandidates = async (file: File) => {
     try {
@@ -142,18 +86,20 @@ function App() {
   }
   return <div className="app-shell">
     <header className="topbar"><div className="brand"><span className="brand-mark">C</span><span>Clyptus<span className="brand-dot">.ai</span></span></div><div className="workspace-name">Employee evaluation workspace <span className={`workspace-pill ${dbStatus}`} title={dbStatus === 'offline' ? 'Database unavailable: changes are kept in this browser only' : undefined}>{dbStatus === 'connected' ? 'Database connected' : dbStatus === 'offline' ? 'Offline' : dbStatus === 'locked' ? 'Locked' : 'Connecting…'}</span></div><div className="toolbar">{view !== 'list' && <button className="button ghost" onClick={() => setView('list')}><ArrowLeft size={16}/> Candidate list</button>}{view === 'dashboard' && selected && <><button className="button secondary" onClick={() => openEdit(selected)}><Pencil size={16}/> Edit candidate</button><button className="button primary" onClick={() => window.print()}><FileDown size={16}/> Download PDF</button></>}</div></header>
-    {view === 'list' && <CandidateList candidates={candidates} query={query} setQuery={setQuery} sort={sort} setSort={setSort} onAdd={openNew} onImport={importCandidates} onOpen={openDashboard} onEdit={openEdit} onDelete={removeCandidate}/>} 
-    {view === 'form' && <CandidateForm report={draft} update={update} editing={!!editingId} onSave={() => saveCandidate(false)} onDraft={() => saveCandidate(true)} onCancel={() => setView('list')} onError={message => flash(message, 3000)}/>} 
-    {view === 'dashboard' && selected && <Dashboard report={selected} onBack={() => setView('list')} onEdit={() => openEdit(selected)}/>} 
+    {view === 'list' && <CandidateList candidates={candidates} query={query} setQuery={setQuery} sort={sort} setSort={setSort} onAdd={openNew} onImport={importCandidates} onExport={() => { if (!candidates.length) { flash('There are no candidates to export.', 2600); return }; exportCandidatesToExcel(candidates); flash('Candidates exported to Excel', 2600) }} onOpen={openDashboard} onEdit={openEdit} onDelete={removeCandidate}/>}
+    {view === 'form' && <CandidateForm report={draft} update={update} editing={!!editingId} onSave={() => saveCandidate(false)} onDraft={() => saveCandidate(true)} onCancel={() => setView('list')} onError={message => flash(message, 3000)}/>}
+    {view === 'dashboard' && selected && <Dashboard report={selected} onBack={() => setView('list')} onEdit={() => openEdit(selected)}/>}
     {dbStatus === 'locked' && <AccessGate rejected={keyRejected} onSubmit={unlock}/>}
     {notice && <div className="toast"><Check size={16}/> {notice}</div>}
   </div>
 }
 
-function CandidateList({ candidates, query, setQuery, sort, setSort, onAdd, onImport, onOpen, onEdit, onDelete }: { candidates: Candidate[]; query: string; setQuery: (v: string) => void; sort: 'name' | 'rating'; setSort: (v: 'name' | 'rating') => void; onAdd: () => void; onImport: (file: File) => void; onOpen: (c: Candidate) => void; onEdit: (c: Candidate) => void; onDelete: (c: Candidate) => void }) {
+export default App
+
+function CandidateList({ candidates, query, setQuery, sort, setSort, onAdd, onImport, onExport, onOpen, onEdit, onDelete }: { candidates: Candidate[]; query: string; setQuery: (v: string) => void; sort: 'name' | 'rating'; setSort: (v: 'name' | 'rating') => void; onAdd: () => void; onImport: (file: File) => void; onExport: () => void; onOpen: (c: Candidate) => void; onEdit: (c: Candidate) => void; onDelete: (c: Candidate) => void }) {
   const rows = useMemo(() => candidates.filter(c => c.name.toLowerCase().includes(query.toLowerCase())).sort((a, b) => sort === 'name' ? a.name.localeCompare(b.name) : b.rating - a.rating), [candidates, query, sort])
   const importRef = useRef<HTMLInputElement>(null)
-  return <main className="list-page"><div className="list-hero"><div><p className="eyebrow">TEAM LEAD VIEW</p><h1>Candidate evaluations</h1><p>Manage employee reports and open an individual evaluation dashboard.</p></div><div className="list-hero-actions"><button className="button secondary" onClick={() => importRef.current?.click()}><Upload size={17}/> Import Excel</button><input ref={importRef} hidden type="file" accept=".xlsx,.xls,.csv" onChange={e => { const file = e.target.files?.[0]; if (file) onImport(file); e.currentTarget.value = '' }}/><button className="button primary add-candidate" onClick={onAdd}><UserPlus size={17}/> Add candidate</button></div></div><div className="list-toolbar"><div className="search-box"><Search size={17}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search candidates by name" /></div><button className="sort-button" onClick={() => setSort(sort === 'name' ? 'rating' : 'name')}><ArrowUpDown size={15}/> Sort by {sort === 'name' ? 'name' : 'rating'}</button><span className="candidate-total">{candidates.length} candidate{candidates.length === 1 ? '' : 's'}</span></div>{rows.length === 0 ? <div className="empty-state"><UserRound size={28}/><h2>{candidates.length ? 'No candidates found' : 'No candidates yet'}</h2><p>{candidates.length ? 'Try a different search.' : 'Import the workbook or add your first candidate to generate an evaluation dashboard.'}</p>{!candidates.length && <div className="empty-actions"><button className="button secondary" onClick={() => importRef.current?.click()}><Upload size={16}/> Import Excel</button><button className="button primary" onClick={onAdd}><CirclePlus size={16}/> Add candidate</button></div>}</div> : <div className="candidate-table-wrap"><table className="candidate-table"><thead><tr><th>Candidate</th><th>Designation</th><th>Experience</th><th>Working days</th><th>Team</th><th>Team lead rating</th><th>Actions</th></tr></thead><tbody>{rows.map(c => <tr key={c.id}><td><button className="candidate-name" onClick={() => onOpen(c)}>{c.photo ? <img src={c.photo}/> : <span className="table-avatar">{c.name.slice(0, 1).toUpperCase()}</span>}<strong>{c.name}</strong></button></td><td>AI Intern</td><td>{c.experience || '—'}</td><td>{workingDays(c.joining) || '—'}</td><td>{c.team || '—'}</td><td><span className="table-rating"><Star size={15} fill="currentColor"/> {c.rating ? `${c.rating.toFixed(1)} / 10` : 'Not rated'}</span></td><td><div className="row-actions"><button onClick={() => onOpen(c)} title="View report"><Eye size={15}/> View</button><button onClick={() => onEdit(c)} title="Edit candidate"><Pencil size={14}/></button><button className="delete-action" onClick={() => onDelete(c)} title="Delete candidate"><Trash2 size={14}/></button></div></td></tr>)}</tbody></table></div>}</main>
+  return <main className="list-page"><div className="list-hero"><div><p className="eyebrow">TEAM LEAD VIEW</p><h1>Candidate evaluations</h1><p>Manage employee reports and open an individual evaluation dashboard.</p></div><div className="list-hero-actions"><button className="button secondary" onClick={onExport}><FileDown size={17}/> Export Excel</button><button className="button secondary" onClick={() => importRef.current?.click()}><Upload size={17}/> Import Excel</button><input ref={importRef} hidden type="file" accept=".xlsx,.xls,.csv" onChange={e => { const file = e.target.files?.[0]; if (file) onImport(file); e.currentTarget.value = '' }}/><button className="button primary add-candidate" onClick={onAdd}><UserPlus size={17}/> Add candidate</button></div></div><div className="list-toolbar"><div className="search-box"><Search size={17}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search candidates by name" /></div><button className="sort-button" onClick={() => setSort(sort === 'name' ? 'rating' : 'name')}><ArrowUpDown size={15}/> Sort by {sort === 'name' ? 'name' : 'rating'}</button><span className="candidate-total">{candidates.length} candidate{candidates.length === 1 ? '' : 's'}</span></div>{rows.length === 0 ? <div className="empty-state"><UserRound size={28}/><h2>{candidates.length ? 'No candidates found' : 'No candidates yet'}</h2><p>{candidates.length ? 'Try a different search.' : 'Import the workbook or add your first candidate to generate an evaluation dashboard.'}</p>{!candidates.length && <div className="empty-actions"><button className="button secondary" onClick={() => importRef.current?.click()}><Upload size={16}/> Import Excel</button><button className="button primary" onClick={onAdd}><CirclePlus size={16}/> Add candidate</button></div>}</div> : <div className="candidate-table-wrap"><table className="candidate-table"><thead><tr><th>Candidate</th><th>Designation</th><th>Experience</th><th>Working days</th><th>Team</th><th>Team lead rating</th><th>Actions</th></tr></thead><tbody>{rows.map(c => <tr key={c.id}><td><button className="candidate-name" onClick={() => onOpen(c)}>{c.photo ? <img src={c.photo}/> : <span className="table-avatar">{c.name.slice(0, 1).toUpperCase()}</span>}<strong>{c.name}</strong></button></td><td>AI Intern</td><td>{c.experience || '—'}</td><td>{workingDays(c.joining) || '—'}</td><td>{c.team || '—'}</td><td><span className="table-rating"><Star size={15} fill="currentColor"/> {c.rating ? `${c.rating.toFixed(1)} / 10` : 'Not rated'}</span></td><td><div className="row-actions"><button onClick={() => onOpen(c)} title="View report"><Eye size={15}/> View</button><button onClick={() => onEdit(c)} title="Edit candidate"><Pencil size={14}/></button><button className="delete-action" onClick={() => onDelete(c)} title="Delete candidate"><Trash2 size={14}/></button></div></td></tr>)}</tbody></table></div>}</main>
 }
 
 function CandidateForm({ report, update, editing, onSave, onDraft, onCancel, onError }: { report: Report; update: <K extends keyof Report>(key: K, value: Report[K]) => void; editing: boolean; onSave: () => void; onDraft: () => void; onCancel: () => void; onError: (message: string) => void }) {
@@ -192,5 +138,3 @@ function ListPreview({ icon, title, items }: { icon: React.ReactNode; title: str
 function SkillsPreview({ skills }: { skills: string[] }) { return <Card icon={<FolderKanban/>} title="Skills"><div className="skill-list">{skills.filter(x => x.trim()).map((skill, i) => <span className="skill" key={i}>{skill}</span>)}</div></Card> }
 function WorthPreview({ report }: { report: Report }) { const pct = Math.max(0, Math.min(100, report.worth)); return <Card icon={<Target/>} title="Worth for Projects" subtitle="Assessment of project value and contribution" className="worth-card"><div className="worth-content"><div className="gauge-wrap"><div className="gauge" style={{ '--value': `${pct * 1.8}deg` } as React.CSSProperties}><div className="gauge-inner"><strong>{pct}%</strong></div></div><div className="value-label">{pct >= 75 ? 'High Value' : pct >= 45 ? 'Medium Value' : 'Needs Focus'}</div></div><div className="worth-points"><div className="editable-list">{report.worthPoints.filter(x => x.trim()).map((point, i) => <div className="edit-list-row" key={i}><Check size={15}/><strong>{point}</strong></div>)}</div></div></div></Card> }
 function SummaryPreview({ report }: { report: Candidate }) { return <section className="summary-card"><div className="summary-head"><Star size={27}/><h2>Overall Summary & Recommendation</h2></div><p className="summary-text">{report.summary || '—'}</p>{report.remarks && <p className="remarks-text"><strong>Remarks:</strong> {report.remarks}</p>}<div className="recommendation"><Check size={18}/><strong>Recommendation:</strong><span>{report.recommendation}</span></div></section> }
-
-createRoot(document.getElementById('root')!).render(<StrictMode><App/></StrictMode>)

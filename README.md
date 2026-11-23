@@ -1,190 +1,144 @@
-# Clyptus.ai Employee Evaluation Report
+# Clyptus.ai employee evaluation workspace
 
-A lightweight React + TypeScript + Vite application for creating and managing professional employee evaluation reports.
+React/Vite frontend and Express API for candidate evaluation reports. Candidate payloads remain compatible with the existing application: projects, ratings, capabilities, skills, contribution points, summary, recommendation, photos, and imported fields are stored together as JSON. The production database is PostgreSQL; SQLite is intentionally limited to local development.
 
-The app runs entirely in the browser. It does not require a backend, database, login, or API configuration.
+## Repository structure
 
-The current version includes a local SQLite API for development and a Vercel production API for shared data. LocalStorage remains as an offline fallback if an API is unavailable.
+```text
+frontend/
+  src/App.tsx                         Existing list, form, dashboard, import, and print workflow
+  src/features/candidates/             Candidate types, API client, and browser helpers
+  src/styles.css                       Existing visual design
+  vite.config.ts                       Dev proxy and Vite build configuration
+backend/
+  src/app.ts                           Express middleware and routes
+  src/config/environment.ts            Environment validation and database selection
+  src/controllers/                     HTTP response handling
+  src/db/                              Migration runner and repository contract
+  src/repositories/                    PostgreSQL and local SQLite implementations
+  src/services/candidate-service.ts    Validation, timestamps, and bulk-upsert behavior
+  migrations/                          Versioned PostgreSQL/SQLite migrations
+  src/scripts/                         Migration, backup, and import commands
+render.yaml                            Render Web Service, Static Site, and PostgreSQL blueprint
+.env.example                           Safe variable names and placeholders only
+```
 
 ## Requirements
 
-Install the following before running the application:
+- Node.js 20 or newer
+- npm 10 or newer
+- PostgreSQL for shared/production use, or SQLite automatically for local development
 
-- Node.js 18 or newer
-- npm, included with Node.js
-
-Check that they are installed:
-
-```powershell
-node --version
-npm --version
-```
-
-## Run the application locally
-
-### 1. Open a terminal
-
-Open PowerShell or Windows Terminal.
-
-### 2. Go to the project folder
-
-```powershell
-cd "S:\AI Team"
-```
-
-If the project is stored somewhere else, replace the path with the correct folder path.
-
-### 3. Install dependencies
-
-Run this once after downloading or copying the project:
+Install from the repository root:
 
 ```powershell
 npm install
+Copy-Item .env.example .env
 ```
 
-This installs React, Vite, TypeScript, Lucide icons, and the required type definitions.
+`APP_ACCESS_KEY` is a user-entered shared workspace key. It is never compiled into the frontend or read from a `VITE_*` variable. In local development it can be left empty while `ALLOW_INSECURE_LOCAL=true`; production requires it.
 
-### 4. Start the development server
+## Local development
+
+With no `DATABASE_URL`, the backend creates `data/candidates.sqlite`, applies the SQLite migration, and listens on `http://localhost:3001`.
 
 ```powershell
 npm run dev
 ```
 
-This starts:
+Open `http://localhost:5173`. The frontend proxies `/api` to the backend. To use an access key locally, set `APP_ACCESS_KEY` and enter that key in the unlock prompt. To use PostgreSQL locally, set `DATABASE_URL` and run:
 
-- Vite frontend at `http://localhost:5173/`
-- SQLite API at `http://localhost:3001/`
+```powershell
+npm run migrate
+npm run dev
+```
 
-The SQLite database file is created automatically at `data/candidates.sqlite`.
+## API contract
 
-For Vercel deployment, connect a Postgres provider from the Vercel Marketplace, such as Neon or Supabase. Vercel injects the database environment variables into the deployment, and `api/candidates.ts` stores candidate records in the hosted database. This is what makes data entered on a laptop available on a phone using the same deployed URL. Vercel’s current database integrations are provided through the Marketplace. See the [Vercel Postgres documentation](https://vercel.com/docs/postgres).
+All candidate routes require `x-access-key` when `APP_ACCESS_KEY` is configured. `GET /api/health` is unauthenticated and only reports reachability plus the database driver.
 
-### Required settings for the Vercel deployment
+| Method | Route | Behavior |
+|---|---|---|
+| GET | `/api/health` | Database reachability check |
+| GET | `/api/candidates` | List candidates, newest updated first |
+| GET | `/api/candidates/:id` | Read one candidate |
+| POST | `/api/candidates` | Create or update one candidate by its existing id |
+| PUT | `/api/candidates` | Transactional bulk upsert; records absent from the request are retained |
+| DELETE | `/api/candidates/:id` | Delete one candidate |
 
-| Variable | Purpose |
+Invalid JSON, oversized bodies, missing IDs, missing records, and unauthorized requests return safe error messages without payloads, access keys, connection strings, or photos in logs.
+
+## Data and migration behavior
+
+- PostgreSQL stores `id`, `updated_at`, and the complete candidate payload in a JSONB `payload` column. An index supports newest-first listing, and a check constraint keeps the JSON id aligned with the primary key.
+- SQLite uses the same logical schema with a TEXT JSON payload for local-only development.
+- Migrations are versioned in `backend/migrations/` and run automatically at API startup. They can also be run explicitly with `npm run migrate`.
+- Browser `localStorage` remains the offline cache (`clyptus-candidates`) and draft store (`clyptus-draft`) so the current offline workflow is preserved. The access key is held in `sessionStorage`, not bundled into the application.
+- Photos are retained in the candidate payload as data URLs or supported links. The frontend shrinks large image uploads before sending them; the API has a 4 MB JSON body limit.
+- Excel/CSV import still deduplicates by normalized name + email in the browser. The candidate list also exports the complete evaluation dataset to a timestamped `.xlsx` workbook. Bulk API calls only upsert submitted IDs and never delete unrelated rows.
+
+Back up local SQLite before moving to PostgreSQL:
+
+```powershell
+npm run backup:local -- --output=backups/candidates.json
+```
+
+Set production `DATABASE_URL`, then import and verify row counts:
+
+```powershell
+$env:DATABASE_URL = "postgresql://user:password@host/database?sslmode=require"
+$env:APP_ACCESS_KEY = "use-the-production-key"
+npm run migrate
+npm run import:backup -- --file=backups/candidates.json --on-duplicate=update
+```
+
+Use `--on-duplicate=skip` to retain an existing PostgreSQL row. The import command reports imported/skipped counts and before/after row counts. Keep backups outside Git; `backups/`, `.env`, database files, and build output are ignored.
+
+## Render deployment
+
+The root `render.yaml` defines:
+
+- `clyptus-api`: Node Web Service, `npm ci && npm run build --workspace backend`, start `npm run start --workspace backend`, health check `/api/health`.
+- `clyptus-frontend`: Static Site, `npm ci && npm run build --workspace frontend`, publish directory `frontend/dist`, SPA rewrite to `/index.html`.
+- `clyptus-db`: Render PostgreSQL, linked to the API as `DATABASE_URL`.
+
+After creating the Blueprint, configure these values in the Render Dashboard:
+
+### API Web Service
+
+| Variable | Value |
 |---|---|
-| `DATABASE_URL` (or `POSTGRES_URL`) | Set automatically when you connect Neon/Postgres from the Vercel Marketplace. |
-| `APP_ACCESS_KEY` | Shared key that protects candidate data. The deployed API refuses all requests until this is set. Share it only with people who should see evaluations; they enter it once per browser. |
+| `NODE_ENV` | `production` |
+| `DATABASE_URL` | Blueprint-linked PostgreSQL connection string |
+| `APP_ACCESS_KEY` | Long random value; never commit it |
+| `FRONTEND_ORIGIN` | Exact deployed frontend origin, e.g. `https://clyptus-frontend.onrender.com` |
+| `JSON_BODY_LIMIT` | `4mb` |
 
-Locally, `APP_ACCESS_KEY` is optional because the local API only accepts connections from this computer.
+The service must bind to `0.0.0.0` and uses Render's `PORT` automatically. It runs migrations at startup and does not use SQLite in production.
 
-Vite will display a local address similar to:
+### Static Site
 
-```text
-http://localhost:5173/
-```
+| Variable | Value |
+|---|---|
+| `VITE_API_BASE_URL` | Full API base ending in `/api`, e.g. `https://clyptus-api.onrender.com/api` |
 
-Open that address in your browser.
+Because `VITE_API_BASE_URL` is public build configuration, it must not contain credentials. If either Render service gets a different URL, update the other service's value so `FRONTEND_ORIGIN` and the API base match the deployed URLs exactly.
 
-To stop the server, press `Ctrl + C` in the terminal.
-
-## Application workflow
-
-The application uses three screens:
-
-1. Candidate List
-2. Add/Edit Candidate Form
-3. Individual Evaluation Dashboard
-
-### Add a candidate
-
-1. Click `Add candidate` on the Candidate List page.
-2. Complete the candidate information fields.
-3. Upload a candidate photograph if available.
-4. Add projects and choose each project status.
-5. Set the Team Lead Rating, including half-point ratings such as `4.5`.
-6. Add capabilities, skills, project-worth points, summary, recommendation, and optional remarks.
-7. Click `Save candidate`.
-8. The candidate appears as one row in the Candidate List.
-
-### Open and manage a candidate
-
-- Click the candidate name or `View` to open the individual dashboard.
-- Use `Edit` to reopen the form with all saved values prefilled.
-- Use the delete button to remove a candidate after confirmation.
-- Search candidates by name.
-- Click the sort control to switch between name and rating sorting.
-- Click `Print / Download PDF`, then choose `Save as PDF` in the browser print dialog.
-
-Use `Save draft` when you want to keep an incomplete form locally without adding it to the Candidate List.
-
-### Import candidates from Excel
-
-1. Open the Candidate List page.
-2. Click `Import Excel`.
-3. Select `Interns_Access_Details (Responses).xlsx`.
-4. The app imports the candidate name, phone number, email ID, and blood group.
-5. Imported rows appear in the Candidate List as individual candidates.
-6. Use `Edit` on each imported candidate to complete the evaluation details such as designation, experience, projects, rating, capabilities, skills, and summary.
-
-Duplicate rows with the same name and email are skipped automatically.
-
-## Production build
-
-To create an optimized production build:
+## Verification and troubleshooting
 
 ```powershell
+npm run typecheck
 npm run build
+Invoke-WebRequest http://localhost:3001/api/health
 ```
 
-The compiled files are created in the `dist` folder.
+To verify persistence after a deploy, create a disposable candidate, reload the frontend, query `GET /api/candidates` with the access key, redeploy/restart the API, and query again. Do not use real employee data for smoke checks.
 
-## Preview the production build
+Common issues:
 
-After running the build command:
+- `401 Access key required`: enter the exact API `APP_ACCESS_KEY`; do not put it in `VITE_API_BASE_URL`.
+- CORS errors: set `FRONTEND_ORIGIN` to the exact scheme + hostname of the Static Site, without a trailing path.
+- `503 Database is unavailable`: verify `DATABASE_URL`, database availability, and Render region/network settings; API startup logs intentionally do not print credentials.
+- Empty local list after clearing site data: browser cache and drafts are local fallback data; restore shared records from PostgreSQL or a backup.
 
-```powershell
-npm run preview
-```
-
-To run only the SQLite API:
-
-```powershell
-npm run server
-```
-
-Open the local URL shown in the terminal.
-
-## Data storage
-
-- Candidate records are saved using browser `localStorage`.
-- Candidate records are also persisted through the local SQLite API when the server is running.
-- The SQLite API stores each candidate as a structured JSON payload in `data/candidates.sqlite`.
-- Each candidate has a unique ID, so editing updates the existing record instead of creating a duplicate.
-- Draft forms are stored separately in `localStorage`.
-- Saved reports are available only in the same browser and device.
-- Clearing browser site data removes saved reports.
-- Uploaded photos are stored as browser data for the saved report.
-- There is currently no cloud sync or shared database.
-
-## Project structure
-
-```text
-S:\AI Team
-├── index.html
-├── package.json
-├── tsconfig.app.json
-├── tsconfig.node.json
-├── vite.config.ts
-└── src
-    ├── main.tsx
-    ├── styles.css
-    └── vite-env.d.ts
-```
-
-## Useful commands
-
-```powershell
-# Install dependencies
-npm install
-
-# Start local development
-npm run dev
-
-# Check the production build
-npm run build
-
-# Preview the production build
-npm run preview
-```
-
+No deployment, production migration, or destructive data operation is run by the repository build scripts.
