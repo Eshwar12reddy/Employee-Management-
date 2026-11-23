@@ -12,8 +12,6 @@ services:
         fromDatabase:
           name: clyptus-db
           property: connectionString
-      - key: APP_ACCESS_KEY
-        generateValue: true
       - key: FRONTEND_ORIGIN
         sync: false
       - key: JSON_BODY_LIMIT

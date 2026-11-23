@@ -8,6 +8,7 @@ export interface AuthRepository {
   findUserByEmail(email: string): Promise<StoredUser | null>
   findUserById(id: string): Promise<StoredUser | null>
   createUser(user: StoredUser): Promise<User>
+  createFirstUser(user: StoredUser): Promise<User | null>
   createSession(session: { tokenHash: string; csrfTokenHash: string; userId: string; expiresAt: string }): Promise<void>
   findSession(tokenHash: string): Promise<SessionRecord | null>
   touchSession(tokenHash: string): Promise<void>

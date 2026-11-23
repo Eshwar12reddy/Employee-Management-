@@ -12,22 +12,29 @@ async function migrationFiles(driver: 'postgres' | 'sqlite'): Promise<Array<{ ve
 }
 
 export async function runPostgresMigrations(pool: Pool): Promise<void> {
-  await pool.query('CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())')
-  for (const migration of await migrationFiles('postgres')) {
-    const existing = await pool.query('SELECT 1 FROM schema_migrations WHERE version = $1', [migration.version])
-    if (existing.rowCount) continue
-    const client = await pool.connect()
-    try {
-      await client.query('BEGIN')
-      await client.query(migration.sql)
-      await client.query('INSERT INTO schema_migrations (version) VALUES ($1)', [migration.version])
-      await client.query('COMMIT')
-    } catch (error) {
-      await client.query('ROLLBACK')
-      throw error
-    } finally {
-      client.release()
+  const lockClient = await pool.connect()
+  try {
+    await lockClient.query('SELECT pg_advisory_lock($1)', [271828])
+    await pool.query('CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())')
+    for (const migration of await migrationFiles('postgres')) {
+      const existing = await pool.query('SELECT 1 FROM schema_migrations WHERE version = $1', [migration.version])
+      if (existing.rowCount) continue
+      const client = await pool.connect()
+      try {
+        await client.query('BEGIN')
+        await client.query(migration.sql)
+        await client.query('INSERT INTO schema_migrations (version) VALUES ($1)', [migration.version])
+        await client.query('COMMIT')
+      } catch (error) {
+        await client.query('ROLLBACK')
+        throw error
+      } finally {
+        client.release()
+      }
     }
+  } finally {
+    await lockClient.query('SELECT pg_advisory_unlock($1)', [271828]).catch(() => undefined)
+    lockClient.release()
   }
 }
 

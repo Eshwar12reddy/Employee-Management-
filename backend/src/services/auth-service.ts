@@ -20,10 +20,17 @@ export class AuthService {
     if (!email || !email.includes('@')) throw new AuthError('A valid email is required')
     if (!name) throw new AuthError('A name is required')
     if (input.password.length < 12) throw new AuthError('Password must be at least 12 characters')
-    if (input.role === 'CEO' && (!input.allowCeoBootstrap || await this.repository.countUsers() > 0)) throw new AuthError('CEO accounts can only be created by the secure first-account provisioning flow')
+    if (input.role === 'CEO' && !input.allowCeoBootstrap) throw new AuthError('CEO accounts can only be created by the secure first-account provisioning flow')
+    const storedUser = { id: randomUUID(), email, name, role: input.role, passwordHash: await bcrypt.hash(input.password, 12), disabled: false }
     try {
-      return await this.repository.createUser({ id: randomUUID(), email, name, role: input.role, passwordHash: await bcrypt.hash(input.password, 12), disabled: false })
-    } catch {
+      if (input.role === 'CEO') {
+        const first = await this.repository.createFirstUser(storedUser)
+        if (!first) throw new AuthError('CEO accounts can only be created by the secure first-account provisioning flow')
+        return first
+      }
+      return await this.repository.createUser(storedUser)
+    } catch (error) {
+      if (error instanceof AuthError) throw error
       throw new AuthError('Unable to create account; the email may already be provisioned')
     }
   }

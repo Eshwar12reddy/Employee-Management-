@@ -8,6 +8,16 @@ import { userRoutes } from './routes/user-routes.js'
 
 import type { AuthService } from './services/auth-service.js'
 
+function databaseErrorCategory(error: unknown): string {
+  const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
+  if (['ENOTFOUND', 'EAI_AGAIN'].includes(code)) return 'dns'
+  if (['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT'].includes(code)) return 'network'
+  if (['28P01', '28000'].includes(code)) return 'authentication'
+  if (code === '3D000') return 'database-not-found'
+  if (code === '57P03') return 'database-starting'
+  return 'query-or-migration'
+}
+
 export function createApp(config: AppConfig, service: CandidateService, authService: AuthService) {
   const app = express()
   app.disable('x-powered-by')
@@ -19,7 +29,8 @@ export function createApp(config: AppConfig, service: CandidateService, authServ
       await service.health()
       await authService.health()
       return res.json({ ok: true, database: config.databaseDriver })
-    } catch {
+    } catch (error) {
+      console.error(`[health] database unavailable (${databaseErrorCategory(error)})`)
       return res.status(503).json({ ok: false, error: 'Database is unavailable' })
     }
   })

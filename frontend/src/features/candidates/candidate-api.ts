@@ -1,6 +1,7 @@
 import type { Candidate } from './candidate-types'
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '')
+let csrfToken = ''
 export const CANDIDATES_CACHE_KEY = 'clyptus-candidates'
 export const LOCAL_MIGRATION_KEY = 'clyptus-candidates-migrated'
 
@@ -9,15 +10,13 @@ export type AppUser = { id: string; email: string; name: string; role: UserRole 
 export class UnauthorizedError extends Error {}
 export class ApiError extends Error { constructor(public readonly status: number, message: string) { super(message) } }
 
-const cookieValue = (name: string) => document.cookie.split('; ').find(value => value.startsWith(`${name}=`))?.slice(name.length + 1) || ''
-
 async function request(path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers)
   const method = (init.method || 'GET').toUpperCase()
   if (init.body) headers.set('Content-Type', 'application/json')
   if (method !== 'GET' && method !== 'HEAD') {
-    const csrf = cookieValue('ems_csrf')
-    if (csrf) headers.set('x-csrf-token', decodeURIComponent(csrf))
+    if (!csrfToken) await ensureCsrf()
+    if (csrfToken) headers.set('x-csrf-token', csrfToken)
   }
   const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers, credentials: 'include' })
   if (response.status === 401) throw new UnauthorizedError('Authentication required')
@@ -28,13 +27,13 @@ async function request(path: string, init: RequestInit = {}) {
   return response
 }
 
-export const ensureCsrf = async () => { await request('/auth/csrf') }
+export const ensureCsrf = async () => { const response = await request('/auth/csrf'); const body = await response.json() as { csrfToken?: string }; if (!body.csrfToken) throw new Error('CSRF token was not provided by the API'); csrfToken = body.csrfToken }
 export const getCurrentUser = async (): Promise<AppUser | null> => { try { return (await (await request('/auth/me')).json() as { user: AppUser }).user } catch (error) { if (error instanceof UnauthorizedError) return null; throw error } }
-export const loginUser = async (email: string, password: string): Promise<AppUser> => { await ensureCsrf(); return (await (await request('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) })).json() as { user: AppUser }).user }
+export const loginUser = async (email: string, password: string): Promise<AppUser> => { await ensureCsrf(); const body = await (await request('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) })).json() as { user: AppUser; csrfToken: string }; csrfToken = body.csrfToken; return body.user }
 export const getSetupStatus = async (): Promise<{ needsCeoSetup: boolean }> => (await (await request('/auth/setup-status')).json() as { needsCeoSetup: boolean })
-export const createFirstCeo = async (name: string, email: string, password: string): Promise<AppUser> => { await ensureCsrf(); return (await (await request('/auth/bootstrap-ceo', { method: 'POST', body: JSON.stringify({ name, email, password }) })).json() as { user: AppUser }).user }
+export const createFirstCeo = async (name: string, email: string, password: string): Promise<AppUser> => { await ensureCsrf(); const body = await (await request('/auth/bootstrap-ceo', { method: 'POST', body: JSON.stringify({ name, email, password }) })).json() as { user: AppUser; csrfToken: string }; csrfToken = body.csrfToken; return body.user }
 export const createTeamLead = async (name: string, email: string, password: string): Promise<AppUser> => { await ensureCsrf(); return (await (await request('/users', { method: 'POST', body: JSON.stringify({ name, email, password }) })).json() as { user: AppUser }).user }
-export const logoutUser = async () => { await ensureCsrf(); await request('/auth/logout', { method: 'POST' }) }
+export const logoutUser = async () => { await ensureCsrf(); await request('/auth/logout', { method: 'POST' }); csrfToken = '' }
 
 export const api = (path = '', init: RequestInit = {}) => request(`/candidates${path}`, init)
 export const readCandidateCache = (): Candidate[] => { try { const value = JSON.parse(localStorage.getItem(CANDIDATES_CACHE_KEY) || '[]'); return Array.isArray(value) ? value : [] } catch { return [] } }

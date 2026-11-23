@@ -28,6 +28,26 @@ export class PostgresAuthRepository implements AuthRepository {
     return toStoredUser(result.rows[0])
   }
 
+  async createFirstUser(user: StoredUser): Promise<User | null> {
+    const client = await this.pool.connect()
+    try {
+      await client.query('BEGIN')
+      await client.query('SELECT pg_advisory_xact_lock($1)', [846271])
+      const existing = await client.query('SELECT 1 FROM users LIMIT 1')
+      if (existing.rowCount) { await client.query('COMMIT'); return null }
+      const result = await client.query<UserRow>(
+        `INSERT INTO users (id, email, name, role, password_hash) VALUES ($1, $2, $3, $4, $5)
+         RETURNING id, email, name, role, password_hash, disabled`,
+        [user.id, user.email, user.name, user.role, user.passwordHash],
+      )
+      await client.query('COMMIT')
+      return toStoredUser(result.rows[0])
+    } catch (error) {
+      await client.query('ROLLBACK')
+      throw error
+    } finally { client.release() }
+  }
+
   async createSession(session: { tokenHash: string; csrfTokenHash: string; userId: string; expiresAt: string }): Promise<void> {
     await this.pool.query('INSERT INTO sessions (token_hash, user_id, csrf_token_hash, expires_at) VALUES ($1, $2, $3, $4)', [session.tokenHash, session.userId, session.csrfTokenHash, session.expiresAt])
   }

@@ -18,7 +18,6 @@ const configFor = (sqlitePath: string): AppConfig => ({
   databaseUrl: '',
   sqlitePath,
   frontendOrigin: 'http://localhost:5173',
-  appAccessKey: 'legacy-test-key',
   allowInsecureLocal: true,
   jsonBodyLimit: '4mb',
   sessionTtlHours: 12,

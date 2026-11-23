@@ -25,7 +25,7 @@ render.yaml                            Render Web Service, Static Site, and Post
 
 ## Requirements
 
-- Node.js 20 or newer
+- Node.js 22.x (the Render runtime is pinned to the same major version)
 - npm 10 or newer
 - PostgreSQL for shared/production use, or SQLite automatically for local development
 
@@ -36,7 +36,7 @@ npm install
 Copy-Item .env.example .env
 ```
 
-Individual accounts replace the shared unlock flow. `APP_ACCESS_KEY` remains in configuration temporarily as a legacy deployment setting during the migration, but is not used to authorize candidate requests. It is never compiled into the frontend or read from a `VITE_*` variable.
+Individual accounts replace the shared unlock flow. Access is enforced by server-side sessions, roles, and CSRF protection. Secrets are never compiled into the frontend or read from a `VITE_*` variable.
 
 ## Local development
 
@@ -61,7 +61,7 @@ npm run dev
 
 ## Authentication and API contract
 
-Login creates a server-side session in PostgreSQL. The session is sent only in a Secure/HttpOnly cookie; the frontend does not store passwords, session tokens, or access keys. A separate CSRF cookie is paired with the `x-csrf-token` header for state-changing requests. CORS allows only `FRONTEND_ORIGIN` and credentialed requests.
+Login creates a server-side session in PostgreSQL. The session is sent only in a Secure/HttpOnly cookie; the frontend keeps only the non-secret CSRF token in memory and sends it in the `x-csrf-token` header for state-changing requests. CORS allows only `FRONTEND_ORIGIN` and credentialed requests.
 
 `CEO` accounts can read all candidates but are read-only. `TEAM_LEAD` accounts can create, import, update, and delete candidates they own. Legacy records without an owner can be claimed by the first Team Lead who updates them. The backend enforces these rules; hiding buttons in the frontend is only a usability layer.
 
@@ -103,7 +103,6 @@ Set production `DATABASE_URL`, then import and verify row counts. The import com
 
 ```powershell
 $env:DATABASE_URL = "postgresql://user:password@host/database?sslmode=require"
-$env:APP_ACCESS_KEY = "use-the-production-key"
 npm run migrate
 npm run import:backup -- --file=backups/candidates.json --on-duplicate=update
 ```
@@ -126,8 +125,7 @@ After creating the Blueprint, configure these values in the Render Dashboard:
 |---|---|
 | `NODE_ENV` | `production` |
 | `DATABASE_URL` | Blueprint-linked PostgreSQL connection string |
-| `APP_ACCESS_KEY` | Long random value; never commit it |
-| `FRONTEND_ORIGIN` | Exact deployed frontend origin, e.g. `https://clyptus-frontend.onrender.com` |
+| `FRONTEND_ORIGIN` | Exact deployed frontend origin, confirmed from the live Static Site URL; no path or trailing slash |
 | `JSON_BODY_LIMIT` | `4mb` |
 | `SESSION_TTL_HOURS` | `12` |
 | `COOKIE_SECURE` | `true` |
@@ -157,7 +155,7 @@ To verify persistence after a deploy, provision a CEO and Team Lead, create a di
 Common issues:
 
 - `401 Authentication required`: sign in again; sessions are per browser and stored in HttpOnly cookies.
-- `403 CSRF validation failed`: reload the frontend so it can establish a CSRF cookie, then sign in again.
+- `403 CSRF validation failed`: reload the frontend so it can obtain a fresh CSRF token, then sign in again.
 - CORS errors: set `FRONTEND_ORIGIN` to the exact scheme + hostname of the Static Site, without a trailing path.
 - `503 Database is unavailable`: verify `DATABASE_URL`, database availability, and Render region/network settings; API startup logs intentionally do not print credentials.
 - Empty local list after clearing site data: browser cache and drafts are local fallback data; restore shared records from PostgreSQL or a backup.
